@@ -163,11 +163,17 @@ const BulkUploadDialog = ({ open, onOpenChange, onUpload }: BulkUploadDialogProp
       setProgress(100);
 
       if (result.successful.length > 0) {
+        console.log('Uploading products:', result.successful);
         onUpload(result.successful);
         toast({
           title: "Upload completed",
           description: `Successfully processed ${result.successful.length} products`,
         });
+        
+        // Close dialog after successful upload
+        setTimeout(() => {
+          handleClose();
+        }, 2000);
       }
 
       if (result.failed.length > 0) {
