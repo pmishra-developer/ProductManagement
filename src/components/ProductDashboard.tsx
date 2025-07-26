@@ -41,12 +41,30 @@ import {
   EyeOff,
   Eye,
   Columns,
+  GripVertical,
 } from "lucide-react";
 import { Product } from "@/types/product";
 import ProductEditDialog from "./ProductEditDialog";
 import BulkUploadDialog from "./BulkUploadDialog";
 import { useToast } from "@/hooks/use-toast";
 import asosLogo from "@/assets/asos-logo.png";
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  horizontalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { useSortable } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 
 const ProductDashboard = () => {
   const [products, setProducts] = useState<Product[]>([
@@ -104,9 +122,17 @@ const ProductDashboard = () => {
   const [sortBy, setSortBy] = useState<keyof Product | null>(null);
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
+  const [columnOrder, setColumnOrder] = useState([
+    "image",
+    "id",
+    "name",
+    "brand",
+    "price",
+    "availability",
+  ]);
   const { toast } = useToast();
 
-  const columns = [
+  const baseColumns = [
     { key: "image", label: "Image" },
     { key: "id", label: "ID" },
     { key: "name", label: "Name" },
@@ -114,6 +140,18 @@ const ProductDashboard = () => {
     { key: "price", label: "Price" },
     { key: "availability", label: "Availability" },
   ];
+
+  // Get columns in the correct order
+  const columns = columnOrder
+    .map((key) => baseColumns.find((col) => col.key === key))
+    .filter(Boolean) as typeof baseColumns;
+
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
 
   const filteredProducts = useMemo(() => {
     let filtered = products.filter(
@@ -333,6 +371,82 @@ const ProductDashboard = () => {
 
   const isColumnHidden = (columnKey: string) => hiddenColumns.has(columnKey);
 
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+
+    if (active.id !== over?.id) {
+      const oldIndex = columnOrder.indexOf(active.id as string);
+      const newIndex = columnOrder.indexOf(over?.id as string);
+
+      setColumnOrder(arrayMove(columnOrder, oldIndex, newIndex));
+      toast({
+        title: "Column reordered",
+        description: "Column order has been updated.",
+      });
+    }
+  };
+
+  // Sortable header component
+  const SortableTableHeader = ({
+    column,
+  }: {
+    column: { key: string; label: string };
+  }) => {
+    const {
+      attributes,
+      listeners,
+      setNodeRef,
+      transform,
+      transition,
+      isDragging,
+    } = useSortable({ id: column.key });
+
+    const style = {
+      transform: CSS.Transform.toString(transform),
+      transition,
+      opacity: isDragging ? 0.5 : 1,
+    };
+
+    return (
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <TableHead
+            ref={setNodeRef}
+            style={style}
+            className="cursor-pointer hover:bg-muted/50 select-none relative"
+            onClick={
+              column.key !== "image"
+                ? () => handleSort(column.key as keyof Product)
+                : undefined
+            }
+          >
+            <div className="flex items-center gap-2">
+              <div
+                {...attributes}
+                {...listeners}
+                className="cursor-grab active:cursor-grabbing p-1 hover:bg-accent rounded"
+              >
+                <GripVertical className="h-4 w-4 text-muted-foreground" />
+              </div>
+              <span>{column.label}</span>
+              {column.key !== "image" &&
+                getSortIcon(column.key as keyof Product)}
+            </div>
+          </TableHead>
+        </ContextMenuTrigger>
+        <ContextMenuContent className="w-48">
+          <ContextMenuItem
+            onClick={() => handleHideColumn(column.key)}
+            className="flex items-center gap-2"
+          >
+            <EyeOff className="h-4 w-4" />
+            Hide {column.label} Column
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+    );
+  };
+
   const ImageThumbnail = ({ product }: { product: Product }) => {
     const [isHovered, setIsHovered] = useState(false);
 
@@ -501,74 +615,75 @@ const ProductDashboard = () => {
           </Card>
         </div>
 
-        {/* Search and Column Controls */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            {/* Column Visibility Dropdown */}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
+        <div className="flex items-center gap-4">
+          {/* Column Visibility Dropdown */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className="flex items-center gap-2"
+              >
+                <Columns className="h-4 w-4" />
+                Columns
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuLabel>Show/Hide Columns</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {columns.map((column) => (
+                <DropdownMenuItem
+                  key={column.key}
+                  className="flex items-center gap-2 cursor-pointer"
+                  onSelect={(e) => e.preventDefault()}
+                >
+                  <Checkbox
+                    checked={!isColumnHidden(column.key)}
+                    onCheckedChange={(checked) => {
+                      if (checked) {
+                        handleShowColumn(column.key);
+                      } else {
+                        handleHideColumn(column.key);
+                      }
+                    }}
+                    className="h-4 w-4"
+                  />
+                  <span className="flex-1">{column.label}</span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {/* Hidden Columns Indicators */}
+          {hiddenColumns.size > 0 && (
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-muted-foreground">Hidden:</span>
+              {Array.from(hiddenColumns).map((columnKey) => (
                 <Button
+                  key={columnKey}
                   variant="outline"
                   size="sm"
-                  className="flex items-center gap-2"
+                  onClick={() => handleShowColumn(columnKey)}
+                  className="h-7 px-2 text-xs"
                 >
-                  <Columns className="h-4 w-4" />
-                  Columns
+                  <Eye className="h-3 w-3 mr-1" />
+                  {columns.find((col) => col.key === columnKey)?.label}
                 </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-48">
-                <DropdownMenuLabel>Show/Hide Columns</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                {columns.map((column) => (
-                  <DropdownMenuItem
-                    key={column.key}
-                    className="flex items-center gap-2 cursor-pointer"
-                    onSelect={(e) => e.preventDefault()}
-                  >
-                    <Checkbox
-                      checked={!isColumnHidden(column.key)}
-                      onCheckedChange={(checked) => {
-                        if (checked) {
-                          handleShowColumn(column.key);
-                        } else {
-                          handleHideColumn(column.key);
-                        }
-                      }}
-                      className="h-4 w-4"
-                    />
-                    <span className="flex-1">{column.label}</span>
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
+              ))}
+            </div>
+          )}
 
-            {/* Hidden Columns Indicators */}
-            {hiddenColumns.size > 0 && (
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-muted-foreground">Hidden:</span>
-                {Array.from(hiddenColumns).map((columnKey) => (
-                  <Button
-                    key={columnKey}
-                    variant="outline"
-                    size="sm"
-                    onClick={() => handleShowColumn(columnKey)}
-                    className="h-7 px-2 text-xs"
-                  >
-                    <Eye className="h-3 w-3 mr-1" />
-                    {columns.find((col) => col.key === columnKey)?.label}
-                  </Button>
-                ))}
-              </div>
-            )}
-          </div>
-          <div className="relative flex-1 max-w-sm">
-            <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="Search products..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-8"
-            />
+          {/* Search and Column Controls */}
+          <div className="flex items-center justify-between">
+            <div className="relative flex-1 max-w-sm">
+              <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Search products..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="pl-8"
+              />
+            </div>
           </div>
         </div>
 
@@ -579,96 +694,109 @@ const ProductDashboard = () => {
           </CardHeader>
           <CardContent>
             <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    {columns.map(
-                      (column) =>
-                        !isColumnHidden(column.key) && (
-                          <ContextMenu key={column.key}>
-                            <ContextMenuTrigger asChild>
-                              <TableHead
-                                className="cursor-pointer hover:bg-muted/50 select-none"
-                                onClick={
-                                  column.key !== "image"
-                                    ? () =>
-                                        handleSort(column.key as keyof Product)
-                                    : undefined
-                                }
-                              >
-                                <div className="flex items-center">
-                                  {column.label}
-                                  {column.key !== "image" &&
-                                    getSortIcon(column.key as keyof Product)}
-                                </div>
-                              </TableHead>
-                            </ContextMenuTrigger>
-                            <ContextMenuContent className="w-48">
-                              <ContextMenuItem
-                                onClick={() => handleHideColumn(column.key)}
-                                className="flex items-center gap-2"
-                              >
-                                <EyeOff className="h-4 w-4" />
-                                Hide {column.label} Column
-                              </ContextMenuItem>
-                            </ContextMenuContent>
-                          </ContextMenu>
-                        )
-                    )}
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredProducts.map((product) => (
-                    <TableRow key={product.id}>
-                      {!isColumnHidden("image") && (
-                        <TableCell>
-                          <ImageThumbnail product={product} />
-                        </TableCell>
-                      )}
-                      {!isColumnHidden("id") && (
-                        <TableCell className="font-mono text-sm">
-                          {product.id}
-                        </TableCell>
-                      )}
-                      {!isColumnHidden("name") && (
-                        <TableCell className="font-medium">
-                          {product.name}
-                        </TableCell>
-                      )}
-                      {!isColumnHidden("brand") && (
-                        <TableCell>{product.brand}</TableCell>
-                      )}
-                      {!isColumnHidden("price") && (
-                        <TableCell>£{product.price.toFixed(2)}</TableCell>
-                      )}
-                      {!isColumnHidden("availability") && (
-                        <TableCell>
-                          {getAvailabilityBadge(product.availability)}
-                        </TableCell>
-                      )}
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-2">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleEditProduct(product)}
-                          >
-                            <Edit2 className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleDeleteProduct(product.id)}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </TableCell>
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragEnd={handleDragEnd}
+              >
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <SortableContext
+                        items={columns
+                          .filter((col) => !isColumnHidden(col.key))
+                          .map((col) => col.key)}
+                        strategy={horizontalListSortingStrategy}
+                      >
+                        {columns.map(
+                          (column) =>
+                            !isColumnHidden(column.key) && (
+                              <SortableTableHeader
+                                key={column.key}
+                                column={column}
+                              />
+                            )
+                        )}
+                      </SortableContext>
+                      <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredProducts.map((product) => (
+                      <TableRow key={product.id}>
+                        {columns.map((column) => {
+                          if (isColumnHidden(column.key)) return null;
+
+                          switch (column.key) {
+                            case "image":
+                              return (
+                                <TableCell key={column.key}>
+                                  <ImageThumbnail product={product} />
+                                </TableCell>
+                              );
+                            case "id":
+                              return (
+                                <TableCell
+                                  key={column.key}
+                                  className="font-mono text-sm"
+                                >
+                                  {product.id}
+                                </TableCell>
+                              );
+                            case "name":
+                              return (
+                                <TableCell
+                                  key={column.key}
+                                  className="font-medium"
+                                >
+                                  {product.name}
+                                </TableCell>
+                              );
+                            case "brand":
+                              return (
+                                <TableCell key={column.key}>
+                                  {product.brand}
+                                </TableCell>
+                              );
+                            case "price":
+                              return (
+                                <TableCell key={column.key}>
+                                  £{product.price.toFixed(2)}
+                                </TableCell>
+                              );
+                            case "availability":
+                              return (
+                                <TableCell key={column.key}>
+                                  {getAvailabilityBadge(product.availability)}
+                                </TableCell>
+                              );
+                            default:
+                              return null;
+                          }
+                        })}
+                        <TableCell className="text-right">
+                          <div className="flex justify-end gap-2">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleEditProduct(product)}
+                            >
+                              <Edit2 className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleDeleteProduct(product.id)}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </DndContext>
               {filteredProducts.length === 0 && (
                 <div className="text-center py-8 text-muted-foreground">
                   No products found matching your search.
